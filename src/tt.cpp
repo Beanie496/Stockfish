@@ -123,7 +123,7 @@ TTEntry* TranspositionTable::probe(const Key key, bool& found) const {
 void TranspositionTable::prefetch_entry(Key key) {
     TTEntry* const tte = entry(key);
     prefetch(tte);
-    // this prefetches the cachline containing the last byte of the entry,
+    // this prefetches the cache line containing the last byte of the entry,
     // guaranteeing the whole entry is in the cache
     prefetch((char*) tte + sizeof(TTEntry) - 1);
 }
