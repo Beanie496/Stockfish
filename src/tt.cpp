@@ -54,7 +54,6 @@ void TTEntry::save(
     }
 }
 
-
 uint8_t TTEntry::relative_age(const uint8_t generation8) const {
     // Due to our packed storage format for generation and its cyclic
     // nature we add GENERATION_CYCLE (256 is the modulus, plus what
@@ -67,15 +66,14 @@ uint8_t TTEntry::relative_age(const uint8_t generation8) const {
 }
 
 
-// Sets the size of the transposition table,
-// measured in megabytes. Transposition table consists
-// of clusters and each cluster consists of ClusterSize number of TTEntry.
+// Sets the size of the transposition table, measured in megabytes. The size of
+// the table will be a multiple of the size of a TTEntry.
 void TranspositionTable::resize(size_t mbSize, int threadCount) {
     aligned_large_pages_free(table);
 
-    clusterCount = mbSize * 1024 * 1024 / sizeof(Cluster);
+    entryCount = mbSize * 1024 * 1024 / sizeof(TTEntry);
 
-    table = static_cast<Cluster*>(aligned_large_pages_alloc(clusterCount * sizeof(Cluster)));
+    table = static_cast<TTEntry*>(aligned_large_pages_alloc(entryCount * sizeof(TTEntry)));
     if (!table)
     {
         std::cerr << "Failed to allocate " << mbSize << "MB for transposition table." << std::endl;
@@ -99,10 +97,10 @@ void TranspositionTable::clear(size_t threadCount) {
                 WinProcGroup::bind_this_thread(idx);
 
             // Each thread will zero its part of the hash table
-            const size_t stride = size_t(clusterCount / threadCount), start = size_t(stride * idx),
-                         len = idx != size_t(threadCount) - 1 ? stride : clusterCount - start;
+            const size_t stride = size_t(entryCount / threadCount), start = size_t(stride * idx),
+                         len = idx != size_t(threadCount) - 1 ? stride : entryCount - start;
 
-            std::memset(&table[start], 0, len * sizeof(Cluster));
+            std::memset(&table[start], 0, len * sizeof(TTEntry));
         });
     }
 
@@ -111,29 +109,27 @@ void TranspositionTable::clear(size_t threadCount) {
 }
 
 
-// Looks up the current position in the transposition
-// table. It returns true and a pointer to the TTEntry if the position is found.
-// Otherwise, it returns false and a pointer to an empty or least valuable TTEntry
-// to be replaced later. The replace value of an entry is calculated as its depth
-// minus 8 times its relative age. TTEntry t1 is considered more valuable than
-// TTEntry t2 if its replace value is greater than that of t2.
+// Looks up the current position in the transposition table. It returns whether
+// or not the position is found and a pointer to the TTEntry to be replaced.
 TTEntry* TranspositionTable::probe(const Key key, bool& found) const {
 
-    TTEntry* const tte   = first_entry(key);
+    TTEntry* const tte   = entry(key);
     const uint16_t key16 = uint16_t(key);  // Use the low 16 bits as key inside the cluster
 
-    for (int i = 0; i < ClusterSize; ++i)
-        if (tte[i].key16 == key16 || !tte[i].depth8)
-            return found = bool(tte[i].depth8), &tte[i];
+    found = (tte->key16 == key16 || !tte->depth8) && tte->depth8 != 0;
 
-    // Find an entry to be replaced according to the replacement strategy
-    TTEntry* replace = tte;
-    for (int i = 1; i < ClusterSize; ++i)
-        if (replace->depth8 - replace->relative_age(generation8) * 2
-            > tte[i].depth8 - tte[i].relative_age(generation8) * 2)
-            replace = &tte[i];
+    return tte;
+}
 
-    return found = false, replace;
+
+// Prefetches the cache line/s containing the TTEntry associated with the given
+// key.
+void TranspositionTable::prefetch_entry(Key key) {
+    TTEntry* const tte = entry(key);
+    prefetch(tte);
+    // this prefetches the cache line containing the last byte of the entry,
+    // guaranteeing the whole entry is in the cache
+    prefetch((char*) tte + sizeof(TTEntry) - 1);
 }
 
 
@@ -144,11 +140,9 @@ int TranspositionTable::hashfull() const {
 
     int cnt = 0;
     for (int i = 0; i < 1000; ++i)
-        for (int j = 0; j < ClusterSize; ++j)
-            cnt += table[i].entry[j].depth8
-                && (table[i].entry[j].genBound8 & GENERATION_MASK) == generation8;
+        cnt += table[i].depth8 && (table[i].genBound8 & GENERATION_MASK) == generation8;
 
-    return cnt / ClusterSize;
+    return cnt;
 }
 
 }  // namespace Stockfish

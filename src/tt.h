@@ -61,21 +61,9 @@ struct TTEntry {
 };
 
 
-// A TranspositionTable is an array of Cluster, of size clusterCount. Each
-// cluster consists of ClusterSize number of TTEntry. Each non-empty TTEntry
-// contains information on exactly one position. The size of a Cluster should
-// divide the size of a cache line for best performance, as the cacheline is
-// prefetched when possible.
+// A TranspositionTable is an array of TTEntrys. Each non-empty TTEntry
+// contains information on exactly one position.
 class TranspositionTable {
-
-    static constexpr int ClusterSize = 3;
-
-    struct Cluster {
-        TTEntry entry[ClusterSize];
-        char    padding[2];  // Pad to 32 bytes
-    };
-
-    static_assert(sizeof(Cluster) == 32, "Unexpected Cluster size");
 
     // Constants used to refresh the hash table periodically
 
@@ -101,18 +89,17 @@ class TranspositionTable {
     int      hashfull() const;
     void     resize(size_t mbSize, int threadCount);
     void     clear(size_t threadCount);
+    void     prefetch_entry(Key key);
 
-    TTEntry* first_entry(const Key key) const {
-        return &table[mul_hi64(key, clusterCount)].entry[0];
-    }
+    TTEntry* entry(const Key key) const { return &table[mul_hi64(key, entryCount)]; }
 
     uint8_t generation() const { return generation8; }
 
    private:
     friend struct TTEntry;
 
-    size_t   clusterCount;
-    Cluster* table       = nullptr;
+    size_t   entryCount;
+    TTEntry* table       = nullptr;
     uint8_t  generation8 = 0;  // Size must be not bigger than TTEntry::genBound8
 };
 
